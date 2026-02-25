@@ -1,0 +1,12 @@
+{
+  "name": "sodruzhestvo-bot",
+  "version": "1.0.0",
+  "description": "Бот для спортивного клуба Содружество",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0"
+  }
+}
