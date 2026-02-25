@@ -264,3 +264,14 @@ async function notifyAdmin(user, type, coach = null) {
 // ============ СТАРТ ============
 console.log('🤖 Бот Содружество запущен!');
 console.log(`⏰ ${new Date().toLocaleString('ru-RU')}`);
+
+// ============ EXPRESS ДЛЯ RAILWAY ============
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+    res.send('🤖 Бот Содружество запущен!');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🌍 Web server started on port ${PORT}`));
