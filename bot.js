@@ -1,21 +1,18 @@
 const TelegramBot = require('node-telegram-bot-api');
+const express = require('express');
 
 // ============ НАСТРОЙКИ ============
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 
-// ============ ЗАПУСК БОТА ============
-const bot = new TelegramBot(TOKEN, { 
-    polling: {
-        interval: 300,
-        autoStart: true,
-        params: { timeout: 10 }
-    }
-});
+// Очистка неактивных пользователей
+const INACTIVE_TIMEOUT_MS = 30 * 60 * 1000;     // 30 минут без активности → удаляем
+const MAX_USERS_IN_MEMORY = 5000;               // максимум пользователей в памяти
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;      // проверяем каждые 5 минут
 
 // Хранилище
 const userStates = {};
-const userData = {};
+const userData = {};   // теперь будет содержать lastActivity
 
 // Тренеры и цены
 const COACHES = [
@@ -30,6 +27,15 @@ const PRICES = {
     [COACHES[2]]: 'от 2000 руб.'
 };
 
+// ============ ЗАПУСК БОТА ============
+const bot = new TelegramBot(TOKEN, { 
+    polling: {
+        interval: 300,
+        autoStart: true,
+        params: { timeout: 10 }
+    }
+});
+
 // ============ ОБРАБОТКА ОШИБОК ============
 bot.on('polling_error', (err) => {
     console.error('⚠️ Ошибка polling:', err.message);
@@ -39,6 +45,39 @@ bot.on('polling_error', (err) => {
 bot.on('error', (err) => {
     console.error('❌ Ошибка бота:', err.message);
 });
+
+// ============ ПЕРИОДИЧЕСКАЯ ЧИСТКА ПАМЯТИ ============
+setInterval(() => {
+    const now = Date.now();
+    let deletedCount = 0;
+
+    for (const chatId in userData) {
+        const last = userData[chatId]?.lastActivity || 0;
+        if (now - last > INACTIVE_TIMEOUT_MS) {
+            delete userStates[chatId];
+            delete userData[chatId];
+            deletedCount++;
+        }
+    }
+
+    // Если всё равно слишком много — удаляем самые старые
+    const userCount = Object.keys(userData).length;
+    if (userCount > MAX_USERS_IN_MEMORY) {
+        const sortedByOldest = Object.entries(userData)
+            .sort(([, a], [, b]) => (a.lastActivity || 0) - (b.lastActivity || 0));
+
+        const toDelete = sortedByOldest.slice(0, userCount - MAX_USERS_IN_MEMORY + 100);
+        toDelete.forEach(([chatId]) => {
+            delete userStates[chatId];
+            delete userData[chatId];
+            deletedCount++;
+        });
+    }
+
+    if (deletedCount > 0) {
+        console.log(`🧹 Очищено ${deletedCount} неактивных пользователей. Осталось: ${Object.keys(userData).length}`);
+    }
+}, CLEANUP_INTERVAL_MS);
 
 // ============ /START ============
 bot.onText(/\/start/, (msg) => {
@@ -63,6 +102,8 @@ bot.onText(/\/start/, (msg) => {
     );
     
     userStates[chatId] = 'waiting_for_join';
+    // Инициализируем lastActivity
+    userData[chatId] = { lastActivity: Date.now() };
 });
 
 // ============ ОСНОВНАЯ ЛОГИКА ============
@@ -73,6 +114,11 @@ bot.on('message', async (msg) => {
     
     if (text === '/start') return;
     if (!text && !msg.contact) return;
+
+    // Обновляем время активности при любом сообщении
+    if (userData[chatId]) {
+        userData[chatId].lastActivity = Date.now();
+    }
     
     try {
         // ШАГ 1: Начало
@@ -104,11 +150,14 @@ bot.on('message', async (msg) => {
             }
             
             userData[chatId] = {
-                firstName, lastName,
+                ...(userData[chatId] || {}),
+                firstName, 
+                lastName,
                 fullName: `${firstName} ${lastName}`,
                 age,
                 username: msg.from.username,
-                userId: chatId
+                userId: chatId,
+                lastActivity: Date.now()
             };
             
             userStates[chatId] = 'waiting_for_phone';
@@ -143,6 +192,7 @@ bot.on('message', async (msg) => {
             }
             
             userData[chatId].phone = phone;
+            userData[chatId].lastActivity = Date.now();
             userStates[chatId] = 'waiting_for_training_type';
             
             bot.sendMessage(chatId,
@@ -212,6 +262,7 @@ async function sendGroupInfo(chatId) {
     await bot.sendMessage(chatId, text, { reply_markup: { remove_keyboard: true } });
     await notifyAdmin(user, 'Групповая');
     
+    // Очистка после завершения
     delete userStates[chatId];
     delete userData[chatId];
 }
@@ -229,6 +280,7 @@ async function sendPersonalInfo(chatId, coach) {
     await bot.sendMessage(chatId, text, { reply_markup: { remove_keyboard: true } });
     await notifyAdmin(user, 'Индивидуальная', coach);
     
+    // Очистка после завершения
     delete userStates[chatId];
     delete userData[chatId];
 }
@@ -266,11 +318,10 @@ console.log('🤖 Бот Содружество запущен!');
 console.log(`⏰ ${new Date().toLocaleString('ru-RU')}`);
 
 // ============ EXPRESS ДЛЯ RAILWAY ============
-const express = require('express');
 const app = express();
 
 app.get('/', (req, res) => {
-    res.send('🤖 Бот Содружество запущен!');
+    res.send('🤖 Бот Содружество запущен! Память под контролем.');
 });
 
 const PORT = process.env.PORT || 3000;
